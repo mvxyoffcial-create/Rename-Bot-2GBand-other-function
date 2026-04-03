@@ -12,30 +12,147 @@ from PIL import Image
 import os, time, re, random, asyncio
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#         STEP 1 — FILE RECEIVED: Show tool menu
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 @Client.on_message(filters.private & (filters.document | filters.audio | filters.video))
 async def rename_start(client, message):
     file = getattr(message, message.media.value)
     filename = file.file_name
     if file.file_size > 2000 * 1024 * 1024:
-        return await message.reply_text("Sorry Bro This Bot Doesn't Support Uploading Files Bigger Than 2GB", quote=True)
+        return await message.reply_text(
+            "Sorry Bro This Bot Doesn't Support Uploading Files Bigger Than 2GB", quote=True
+        )
+
+    # Show tools menu first — rename is one of the options
+    is_video = message.media in [MessageMediaType.VIDEO, MessageMediaType.DOCUMENT]
+    is_audio = message.media == MessageMediaType.AUDIO
+
+    buttons = [
+        [InlineKeyboardButton("✏️ Rename File", callback_data=f"tool_rename")],
+    ]
+
+    if is_video:
+        buttons.append([
+            InlineKeyboardButton("🎬 Encode Video", callback_data="tool_encode"),
+        ])
+        buttons.append([
+            InlineKeyboardButton("➖ Remove Stream", callback_data="tool_remove_stream"),
+            InlineKeyboardButton("📤 Extract Stream", callback_data="tool_extract_stream"),
+        ])
+
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="tool_cancel")])
 
     try:
         await message.reply_text(
-            text=f"**Please Enter New Filename...**\n\n**Old File Name** :- `{filename}`",
+            text=(
+                f"**📂 File Received!**\n\n"
+                f"**Name:** `{filename}`\n"
+                f"**Size:** `{humanbytes(file.file_size)}`\n\n"
+                f"**Select What You Want To Do:**"
+            ),
             reply_to_message_id=message.id,
-            reply_markup=ForceReply(True)
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
-        await sleep(30)
     except FloodWait as e:
         await sleep(e.value)
         await message.reply_text(
-            text=f"**Please Enter New Filename**\n\n**Old File Name** :- `{filename}`",
+            text=f"**📂 File Received!**\n\n**Name:** `{filename}`\n\n**Select What You Want To Do:**",
             reply_to_message_id=message.id,
-            reply_markup=ForceReply(True)
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
     except:
         pass
 
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#         TOOL MENU CALLBACK
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@Client.on_callback_query(filters.regex("^tool_"))
+async def tool_menu_handler(bot, query):
+    data = query.data
+    file_message = query.message.reply_to_message
+    file = getattr(file_message, file_message.media.value)
+    filename = file.file_name or "file"
+
+    if data == "tool_cancel":
+        await query.message.delete()
+        return
+
+    elif data == "tool_rename":
+        # Trigger rename flow — ask for new filename
+        await query.message.delete()
+        try:
+            await file_message.reply_text(
+                text=f"**Please Enter New Filename...**\n\n**Old File Name** :- `{filename}`",
+                reply_to_message_id=file_message.id,
+                reply_markup=ForceReply(True)
+            )
+        except FloodWait as e:
+            await sleep(e.value)
+            await file_message.reply_text(
+                text=f"**Please Enter New Filename**\n\n**Old File Name** :- `{filename}`",
+                reply_to_message_id=file_message.id,
+                reply_markup=ForceReply(True)
+            )
+
+    elif data == "tool_encode":
+        # Show encode settings menu
+        user_id = query.from_user.id
+        codec = await jishubotz.get_encode_codec(user_id)
+        crf = await jishubotz.get_encode_crf(user_id)
+        preset = await jishubotz.get_encode_preset(user_id)
+
+        buttons = [
+            [
+                InlineKeyboardButton(f"🎞 Codec: {codec}", callback_data="enc_codec_menu"),
+            ],
+            [
+                InlineKeyboardButton(f"🎚 CRF: {crf}", callback_data="enc_crf_menu"),
+                InlineKeyboardButton(f"⚙️ Preset: {preset}", callback_data="enc_preset_menu"),
+            ],
+            [InlineKeyboardButton("▶️ Start Encode", callback_data="enc_start")],
+            [InlineKeyboardButton("◀️ Back", callback_data="enc_back")],
+        ]
+        await query.message.edit(
+            f"**🎬 Encode Settings**\n\n"
+            f"**File:** `{filename}`\n\n"
+            f"🎞 **Codec:** `{codec}`\n"
+            f"🎚 **CRF:** `{crf}` _(lower = better quality, larger file)_\n"
+            f"⚙️ **Preset:** `{preset}` _(slower = smaller file)_",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+    elif data == "tool_remove_stream":
+        buttons = [
+            [InlineKeyboardButton("🎞 Remove Video Stream", callback_data="rmstream_video")],
+            [InlineKeyboardButton("🔊 Remove Audio Stream", callback_data="rmstream_audio")],
+            [InlineKeyboardButton("💬 Remove Subtitle Stream", callback_data="rmstream_subtitle")],
+            [InlineKeyboardButton("◀️ Back", callback_data="rmstream_back")],
+        ]
+        await query.message.edit(
+            f"**✂️ Remove Stream**\n\n**File:** `{filename}`\n\nSelect which stream to remove:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+    elif data == "tool_extract_stream":
+        buttons = [
+            [InlineKeyboardButton("🎞 Extract Video", callback_data="exstream_video")],
+            [InlineKeyboardButton("🔊 Extract Audio", callback_data="exstream_audio")],
+            [InlineKeyboardButton("💬 Extract Subtitle", callback_data="exstream_subtitle")],
+            [InlineKeyboardButton("◀️ Back", callback_data="exstream_back")],
+        ]
+        await query.message.edit(
+            f"**📤 Extract Stream**\n\n**File:** `{filename}`\n\nSelect which stream to extract:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#         STEP 2 — RENAME: User types new name
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 @Client.on_message(filters.private & filters.reply)
 async def refunc(client, message):
@@ -59,6 +176,7 @@ async def refunc(client, message):
             button.append([InlineKeyboardButton("🎥 Video", callback_data="upload_video")])
         elif file.media == MessageMediaType.AUDIO:
             button.append([InlineKeyboardButton("🎵 Audio", callback_data="upload_audio")])
+
         await message.reply(
             text=f"**Select The Output File Type**\n\n**File Name :-** `{new_name}`",
             reply_to_message_id=file.id,
@@ -66,18 +184,19 @@ async def refunc(client, message):
         )
 
 
-@Client.on_callback_query(filters.regex("upload"))
-async def doc(bot, update):
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#         STEP 3 — UPLOAD (after rename)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    # Creating Directory for Metadata
+@Client.on_callback_query(filters.regex("^upload_"))
+async def doc(bot, update):
     if not os.path.isdir("Metadata"):
         os.mkdir("Metadata")
 
-    # Extracting necessary information
     prefix = await jishubotz.get_prefix(update.message.chat.id)
     suffix = await jishubotz.get_suffix(update.message.chat.id)
     new_name = update.message.text
-    new_filename_ = new_name.split(":-")[1].strip()  # ✅ strip() removes leading space/newline
+    new_filename_ = new_name.split(":-")[1].strip()
 
     try:
         new_filename = add_prefix_suffix(new_filename_, prefix, suffix)
@@ -101,16 +220,13 @@ async def doc(bot, update):
     except Exception as e:
         return await ms.edit(str(e))
 
-    # ✅ Fix: Always define metadata_path and upload_path before use
     _bool_metadata = await jishubotz.get_metadata(update.message.chat.id)
     metadata_path = f"Metadata/{new_filename}"
-    upload_path = file_path  # default upload path
+    upload_path = file_path
 
     if _bool_metadata:
         metadata_code = await jishubotz.get_metadata_code(update.message.chat.id)
         await add_metadata(path, metadata_path, metadata_code, ms)
-
-        # ✅ Verify metadata file was actually created before using it
         if os.path.exists(metadata_path):
             upload_path = metadata_path
         else:
@@ -119,10 +235,9 @@ async def doc(bot, update):
     else:
         await ms.edit("⏳ Mode Changing...  ⚡")
 
-    # Extract duration
     duration = 0
     try:
-        parser = createParser(file_path)  # ✅ Always parse the downloaded file, not metadata path
+        parser = createParser(file_path)
         meta = extractMetadata(parser)
         if meta and meta.has("duration"):
             duration = meta.get('duration').seconds
@@ -156,7 +271,7 @@ async def doc(bot, update):
                 ph_path_ = await take_screen_shot(
                     file_path,
                     os.path.dirname(os.path.abspath(file_path)),
-                    random.randint(0, max(duration - 1, 0))  # ✅ Avoid negative randint if duration is 0
+                    random.randint(0, max(duration - 1, 0))
                 )
                 width, height, ph_path = await fix_thumb(ph_path_)
             except Exception as e:
@@ -170,40 +285,35 @@ async def doc(bot, update):
         if upload_type == "document":
             await bot.send_document(
                 update.message.chat.id,
-                document=upload_path,  # ✅ Always a valid path
+                document=upload_path,
                 thumb=ph_path,
                 caption=caption,
                 progress=progress_for_pyrogram,
                 progress_args=("💠 Try To Uploading...  ⚡", ms, time.time())
             )
-
         elif upload_type == "video":
             await bot.send_video(
                 update.message.chat.id,
-                video=upload_path,  # ✅ Always a valid path
+                video=upload_path,
                 caption=caption,
                 thumb=ph_path,
                 duration=duration,
                 progress=progress_for_pyrogram,
                 progress_args=("💠 Try To Uploading...  ⚡", ms, time.time())
             )
-
         elif upload_type == "audio":
             await bot.send_audio(
                 update.message.chat.id,
-                audio=upload_path,  # ✅ Always a valid path
+                audio=upload_path,
                 caption=caption,
                 thumb=ph_path,
                 duration=duration,
                 progress=progress_for_pyrogram,
                 progress_args=("💠 Try To Uploading...  ⚡", ms, time.time())
             )
-
     except Exception as e:
         return await ms.edit(f"**Error :** `{e}`")
-
     finally:
-        # ✅ Always clean up files whether upload succeeded or failed
         await ms.delete()
         for f in [file_path, metadata_path, ph_path]:
             if f and os.path.exists(f):
