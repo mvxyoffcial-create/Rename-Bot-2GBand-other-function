@@ -78,6 +78,7 @@ async def add_metadata(input_path, output_path, metadata, ms):
 
         command = [
             "ffmpeg", "-y",
+            "-threads", "0",
             "-i", input_path,
             "-map", "0",
             "-c:v", "copy",
@@ -235,6 +236,7 @@ async def remove_stream(input_path, output_path, stream_type, ms):
 
         command = [
             "ffmpeg", "-y",
+            "-threads", "0",
             "-i", input_path,
             "-map", "0",
             f"-map", f"-0:{flag}",
@@ -292,6 +294,7 @@ async def extract_stream(input_path, output_path, stream_type, ms):
 
         command = [
             "ffmpeg", "-y",
+            "-threads", "0",
             "-i", input_path,
             "-map", f"0:{flag}",
             "-c", "copy",
