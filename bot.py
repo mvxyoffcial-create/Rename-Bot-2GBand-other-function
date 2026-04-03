@@ -29,12 +29,14 @@ class Bot(Client):
         me = await self.get_me()
         self.mention = me.mention
         self.username = me.username  
-        self.uptime = Config.BOT_UPTIME     
-        if Config.WEBHOOK:
-            app = web.AppRunner(await web_server())
-            await app.setup()       
-            await web.TCPSite(app, "0.0.0.0", 10000).start()
-            print("Web server started on port 10000")
+        self.uptime = Config.BOT_UPTIME
+
+        # Always start web server (required for Render to detect open port)
+        app = web.AppRunner(await web_server())
+        await app.setup()       
+        await web.TCPSite(app, "0.0.0.0", 10000).start()
+        print("Web server started on port 10000")
+
         print(f"{me.first_name} Is Started.....✨️")
         for id in Config.ADMIN:
             try: await self.send_message(id, f"**{me.first_name}  Is Started...**")                                
@@ -48,6 +50,7 @@ class Bot(Client):
                 await self.send_message(Config.LOG_CHANNEL, f"**{me.mention} Is Restarted !!**\n\n📅 Date : `{date}`\n⏰ Time : `{time}`\n🌐 Timezone : `Asia/Kolkata`\n\n🉐 Version : `v{__version__} (Layer {layer})`</b>")                                
             except:
                 print("Please Make This Is Admin In Your Log Channel")
+
 
 Bot().run()
 
