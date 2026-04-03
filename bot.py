@@ -33,8 +33,7 @@ class Bot(Client):
         if Config.WEBHOOK:
             app = web.AppRunner(await web_server())
             await app.setup()       
-            await web.TCPSite(app, "0.0.0.0", 10000).start()
-            print("Web server started on port 10000")
+            await web.TCPSite(app, "0.0.0.0", 8080).start()     
         print(f"{me.first_name} Is Started.....✨️")
         for id in Config.ADMIN:
             try: await self.send_message(id, f"**{me.first_name}  Is Started...**")                                
@@ -50,6 +49,10 @@ class Bot(Client):
                 print("Please Make This Is Admin In Your Log Channel")
 
 Bot().run()
+
+
+
+
 
 
 # Jishu Developer 
