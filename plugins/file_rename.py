@@ -72,6 +72,7 @@ async def rename_start(client, message):
 
 @Client.on_callback_query(filters.regex("^tool_"))
 async def tool_menu_handler(bot, query):
+    await query.answer()
     data = query.data
     file_message = query.message.reply_to_message
     file = getattr(file_message, file_message.media.value)
@@ -168,6 +169,7 @@ async def refunc(client, message):
 
 @Client.on_callback_query(filters.regex("^upload_"))
 async def doc(bot, update):
+    await update.answer()
     if not os.path.isdir("Metadata"):
         os.mkdir("Metadata")
 
