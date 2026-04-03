@@ -38,8 +38,8 @@ async def rename_start(client, message):
             InlineKeyboardButton("🎬 Encode Video", callback_data="tool_encode"),
         ])
         buttons.append([
-            InlineKeyboardButton("➖ Remove Stream", callback_data="rmstream_go"),
-            InlineKeyboardButton("📤 Extract Stream", callback_data="exstream_go"),
+            InlineKeyboardButton("➖ Remove Stream", callback_data=f"rmstream_go_{message.id}"),
+            InlineKeyboardButton("📤 Extract Stream", callback_data=f"exstream_go_{message.id}"),
         ])
 
     buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="tool_cancel")])
