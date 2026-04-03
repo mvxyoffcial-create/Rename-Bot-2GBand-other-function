@@ -3,11 +3,11 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQ
 from helper.ffmpeg import fix_thumb, take_screen_shot
 from helper.database import jishubotz
 from helper.utils import progress_for_pyrogram, humanbytes, convert
-import os, time, json, asyncio, random
+import os, time, json, asyncio
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#   FFPROBE — fast stream analysis
+#   FFPROBE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def get_streams(file_path):
@@ -102,20 +102,40 @@ def format_stream_info(streams, fmt):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#   STEP 1 — Download & show stream buttons
-#   FIX: answer() called first → no loading spinner
+#   STEP 1 — rmstream_go / exstream_go
+#   callback_data = "rmstream_go_{file_msg_id}"
+#                   "exstream_go_{file_msg_id}"
+#
+#   FIX: file message ID is embedded in callback_data
+#        so we fetch it directly — no reply chain issues
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async def handle_stream_action(bot, query: CallbackQuery, action: str):
-    await query.answer()   # ← FIX: stop Telegram loading spinner immediately
+@Client.on_callback_query(filters.regex(r"^rmstream_go_(\d+)$"))
+async def rmstream_go(bot, query: CallbackQuery):
+    await query.answer()
+    file_msg_id = int(query.data.split("_")[-1])
+    await handle_stream_action(bot, query, "remove", file_msg_id)
 
-    user_id      = query.from_user.id
-    file_message = query.message.reply_to_message
+
+@Client.on_callback_query(filters.regex(r"^exstream_go_(\d+)$"))
+async def exstream_go(bot, query: CallbackQuery):
+    await query.answer()
+    file_msg_id = int(query.data.split("_")[-1])
+    await handle_stream_action(bot, query, "extract", file_msg_id)
+
+
+async def handle_stream_action(bot, query: CallbackQuery, action: str, file_msg_id: int):
+    user_id = query.from_user.id
+    chat_id = query.message.chat.id
+
+    # ✅ FIX: fetch file message directly by ID — no reply chain needed
+    try:
+        file_message = await bot.get_messages(chat_id, file_msg_id)
+    except Exception as e:
+        return await query.message.edit(f"❌ Could not fetch original file: `{e}`")
 
     if not file_message or not file_message.media:
-        return await query.message.edit(
-            "❌ Original file message not found. Please re-send the file."
-        )
+        return await query.message.edit("❌ Original file not found. Please re-send the file.")
 
     file     = getattr(file_message, file_message.media.value)
     filename = getattr(file, "file_name", None) or "input.mkv"
@@ -145,14 +165,18 @@ async def handle_stream_action(bot, query: CallbackQuery, action: str):
             pass
         return await ms.edit("❌ Could not read streams from this file.")
 
+    # One button per stream — embed user_id + stream_idx + file_msg_id
     buttons = []
     for s in streams:
         idx = s.get("index", 0)
         buttons.append([InlineKeyboardButton(
             stream_label(s),
-            callback_data=f"do_{action}_{user_id}_{idx}"
+            callback_data=f"do_{action}_{user_id}_{idx}_{file_msg_id}"
         )])
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data=f"stream_cancel_{user_id}")])
+    buttons.append([InlineKeyboardButton(
+        "❌ Cancel",
+        callback_data=f"stream_cancel_{user_id}"
+    )])
 
     action_label = (
         "📤 Tap a stream to **extract** it:"
@@ -166,20 +190,10 @@ async def handle_stream_action(bot, query: CallbackQuery, action: str):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#   MENU ENTRY POINTS
+#   CANCEL
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-@Client.on_callback_query(filters.regex("^rmstream_go$"))
-async def rmstream_go(bot, query: CallbackQuery):
-    await handle_stream_action(bot, query, "remove")
-
-
-@Client.on_callback_query(filters.regex("^exstream_go$"))
-async def exstream_go(bot, query: CallbackQuery):
-    await handle_stream_action(bot, query, "extract")
-
-
-@Client.on_callback_query(filters.regex("^stream_cancel_"))
+@Client.on_callback_query(filters.regex(r"^stream_cancel_"))
 async def stream_cancel(bot, query: CallbackQuery):
     await query.answer()
     await query.message.delete()
@@ -194,18 +208,19 @@ async def stream_cancel(bot, query: CallbackQuery):
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #   STEP 2 — Process chosen stream
-#   FIX: answer() first, -threads 0 for speed,
-#        safe cleanup in finally block
+#   callback_data = "do_{action}_{user_id}_{idx}_{file_msg_id}"
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-@Client.on_callback_query(filters.regex("^do_(extract|remove)_"))
+@Client.on_callback_query(filters.regex(r"^do_(extract|remove)_"))
 async def do_stream_action(bot, query: CallbackQuery):
-    await query.answer()   # ← FIX: no spinner hang
+    await query.answer()
 
+    # do_extract_userid_streamidx_filemsgid
     parts      = query.data.split("_")
     action     = parts[1]
     user_id    = int(parts[2])
     stream_idx = int(parts[3])
+    # parts[4] is file_msg_id (carried for reference, not needed here since file is already downloaded)
 
     dl_dir = f"downloads/{user_id}"
     files  = os.listdir(dl_dir) if os.path.isdir(dl_dir) else []
