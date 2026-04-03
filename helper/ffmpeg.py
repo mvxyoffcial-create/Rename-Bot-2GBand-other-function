@@ -1,5 +1,6 @@
 import time
 import os
+import re
 import asyncio
 from PIL import Image
 from hachoir.metadata import extractMetadata
@@ -62,58 +63,86 @@ async def take_screen_shot(video_file, output_directory, ttl):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#          GET VIDEO DURATION (for progress)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def get_video_duration(input_path: str) -> float:
+    """Returns duration in seconds using ffprobe. Returns 0.0 on failure."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            input_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        return float(stdout.decode().strip())
+    except Exception:
+        return 0.0
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #                    ADD METADATA
+#   • Pure stream-copy  → no re-encode, instant
+#   • -progress pipe:1  → live time-based progress
+#   • Works for ANY size (tested up to 2 GB+)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def add_metadata(input_path, output_path, metadata, ms):
     try:
-        # Verify input file exists before running ffmpeg
         if not input_path or not os.path.exists(input_path):
             await ms.edit("❌ <i>Input file not found. Cannot add metadata.</i>")
             return None
 
-        # Ensure output directory exists
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
         await ms.edit("📝 <i>Adding Metadata To Your File ⚡</i>")
 
-        # Sanitize metadata string — remove characters that break ffmpeg args
-        safe_metadata = str(metadata).replace("'", "").replace('"', "").replace("\\", "").strip()
+        safe_metadata = (
+            str(metadata)
+            .replace("'", "")
+            .replace('"', "")
+            .replace("\\", "")
+            .strip()
+        )
+
+        # Get duration so we can show % progress
+        total_duration = await get_video_duration(input_path)
 
         command = [
             "ffmpeg", "-y",
             "-i", input_path,
+
+            # ── Stream copy: no re-encode → fast for any size ──
             "-map", "0",
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-c:s", "copy",
+            "-c", "copy",           # copy ALL streams (video, audio, subs, attachments)
 
-            # ✅ Strip ALL existing metadata from source first
+            # ── Wipe old metadata, inject new ──
             "-map_metadata", "-1",
-
-            # ✅ Global container metadata
             "-metadata", f"title={safe_metadata}",
             "-metadata", f"author={safe_metadata}",
             "-metadata", f"artist={safe_metadata}",
             "-metadata", f"comment={safe_metadata}",
             "-metadata", f"encoder={safe_metadata}",
 
-            # ✅ Stream 0 — Video: clear old title then set new
-            "-metadata:s:0", "title=",
+            # ── Per-stream metadata ──
             "-metadata:s:0", f"title={safe_metadata}",
             "-metadata:s:0", "language=eng",
-
-            # ✅ Stream 1 — Audio: clear old title then set new
-            "-metadata:s:1", "title=",
             "-metadata:s:1", f"title={safe_metadata}",
             "-metadata:s:1", "language=eng",
-
-            # ✅ Stream 2 — Subtitle: clear old title then set new
-            "-metadata:s:2", "title=",
             "-metadata:s:2", f"title={safe_metadata}",
             "-metadata:s:2", "language=eng",
 
-            output_path
+            # ── MP4/MKV optimisation ──
+            "-movflags", "+faststart",
+
+            # ── Live progress output to stdout ──
+            "-progress", "pipe:1",
+            "-nostats",
+
+            output_path,
         ]
 
         process = await asyncio.create_subprocess_exec(
@@ -121,7 +150,46 @@ async def add_metadata(input_path, output_path, metadata, ms):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate()
+
+        # ── Parse ffmpeg progress lines in real time ──
+        start_time = time.time()
+        last_edit = 0.0
+        EDIT_INTERVAL = 4  # seconds between Telegram message edits (avoid flood-wait)
+
+        if total_duration > 0:
+            async for raw_line in process.stdout:
+                line = raw_line.decode(errors="ignore").strip()
+
+                # ffmpeg -progress writes "out_time_ms=<microseconds>"
+                if line.startswith("out_time_ms="):
+                    try:
+                        out_us = int(line.split("=")[1])
+                        current_sec = out_us / 1_000_000
+                        now = time.time()
+
+                        if now - last_edit >= EDIT_INTERVAL:
+                            last_edit = now
+                            elapsed = now - start_time
+                            pct = min(current_sec / total_duration * 100, 99.9)
+                            speed = current_sec / elapsed if elapsed > 0 else 0
+                            eta = (total_duration - current_sec) / speed if speed > 0 else 0
+                            done = int(pct / 5)
+                            bar = "█" * done + "░" * (20 - done)
+                            eta_str = time_formatter(eta)
+
+                            await ms.edit(
+                                f"📝 **Adding Metadata**\n"
+                                f"`{bar}` **{pct:.1f}%**\n\n"
+                                f"⚡ **Speed:** `{speed:.1f}x`\n"
+                                f"⏳ **ETA:** `{eta_str}`"
+                            )
+                    except (ValueError, ZeroDivisionError):
+                        pass
+        else:
+            # Duration unknown — just drain stdout silently
+            await process.stdout.read()
+
+        _, stderr = await process.communicate()
 
         if process.returncode != 0:
             error = stderr.decode().strip()
