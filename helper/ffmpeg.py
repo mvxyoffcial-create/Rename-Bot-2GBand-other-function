@@ -67,17 +67,13 @@ async def take_screen_shot(video_file, output_directory, ttl):
 
 async def add_metadata(input_path, output_path, metadata, ms):
     try:
-        # Verify input file exists before running ffmpeg
         if not input_path or not os.path.exists(input_path):
             await ms.edit("❌ <i>Input file not found. Cannot add metadata.</i>")
             return None
 
-        # Ensure output directory exists
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-
         await ms.edit("📝 <i>Adding Metadata To Your File ⚡</i>")
 
-        # Sanitize metadata string — remove characters that break ffmpeg args
         safe_metadata = str(metadata).replace("'", "").replace('"', "").replace("\\", "").strip()
 
         command = [
@@ -87,32 +83,21 @@ async def add_metadata(input_path, output_path, metadata, ms):
             "-c:v", "copy",
             "-c:a", "copy",
             "-c:s", "copy",
-
-            # ✅ Strip ALL existing metadata from source first
             "-map_metadata", "-1",
-
-            # ✅ Global container metadata
             "-metadata", f"title={safe_metadata}",
             "-metadata", f"author={safe_metadata}",
             "-metadata", f"artist={safe_metadata}",
             "-metadata", f"comment={safe_metadata}",
             "-metadata", f"encoder={safe_metadata}",
-
-            # ✅ Stream 0 — Video: clear old title then set new
             "-metadata:s:0", "title=",
             "-metadata:s:0", f"title={safe_metadata}",
             "-metadata:s:0", "language=eng",
-
-            # ✅ Stream 1 — Audio: clear old title then set new
             "-metadata:s:1", "title=",
             "-metadata:s:1", f"title={safe_metadata}",
             "-metadata:s:1", "language=eng",
-
-            # ✅ Stream 2 — Subtitle: clear old title then set new
             "-metadata:s:2", "title=",
             "-metadata:s:2", f"title={safe_metadata}",
             "-metadata:s:2", "language=eng",
-
             output_path
         ]
 
@@ -139,6 +124,201 @@ async def add_metadata(input_path, output_path, metadata, ms):
     except Exception as e:
         print(f"[add_metadata Exception] {e}")
         await ms.edit(f"❌ <i>Error While Adding Metadata: {e}</i>")
+        return None
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#                    ENCODE VIDEO
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def encode_video(input_path, output_path, codec, crf, preset, ms):
+    try:
+        if not input_path or not os.path.exists(input_path):
+            await ms.edit("❌ <i>Input file not found. Cannot encode.</i>")
+            return None
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        await ms.edit(f"🎬 <i>Encoding video with {codec} CRF:{crf} Preset:{preset}...</i>")
+
+        command = [
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-map", "0",
+            "-c:v", codec,
+            "-crf", str(crf),
+            "-preset", preset,
+            "-c:a", "copy",
+            "-c:s", "copy",
+            output_path
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # Live progress tracking via ffmpeg stderr
+        duration_total = 0
+        while True:
+            line = await process.stderr.readline()
+            if not line:
+                break
+            line = line.decode("utf-8", errors="ignore").strip()
+
+            if "Duration:" in line and duration_total == 0:
+                try:
+                    dur_str = line.split("Duration:")[1].split(",")[0].strip()
+                    h, m, s = dur_str.split(":")
+                    duration_total = int(h) * 3600 + int(m) * 60 + float(s)
+                except:
+                    pass
+
+            if "time=" in line and duration_total > 0:
+                try:
+                    time_str = line.split("time=")[1].split(" ")[0].strip()
+                    h, m, s = time_str.split(":")
+                    elapsed = int(h) * 3600 + int(m) * 60 + float(s)
+                    percent = min(elapsed / duration_total * 100, 100)
+                    done = int(percent / 5)
+                    bar = "█" * done + "░" * (20 - done)
+                    await ms.edit(
+                        f"🎬 **Encoding...**\n"
+                        f"`{bar}` **{percent:.1f}%**\n\n"
+                        f"🎞 **Codec:** `{codec}`  |  **CRF:** `{crf}`  |  **Preset:** `{preset}`"
+                    )
+                except:
+                    pass
+
+        await process.wait()
+
+        if process.returncode != 0:
+            await ms.edit("❌ <i>Encoding failed. Check logs.</i>")
+            return None
+
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            await ms.edit("✅ <i>Encoding Completed Successfully!</i>")
+            return output_path
+        else:
+            await ms.edit("❌ <i>Encoded file missing or empty.</i>")
+            return None
+
+    except Exception as e:
+        print(f"[encode_video Exception] {e}")
+        await ms.edit(f"❌ <i>Encode Error: {e}</i>")
+        return None
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#                  REMOVE STREAM
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def remove_stream(input_path, output_path, stream_type, ms):
+    """
+    stream_type: 'video', 'audio', 'subtitle'
+    Removes all streams of that type from the file.
+    """
+    try:
+        if not input_path or not os.path.exists(input_path):
+            await ms.edit("❌ <i>Input file not found.</i>")
+            return None
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        await ms.edit(f"✂️ <i>Removing {stream_type} stream...</i>")
+
+        type_map = {
+            "video": "v",
+            "audio": "a",
+            "subtitle": "s"
+        }
+        flag = type_map.get(stream_type, "s")
+
+        command = [
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-map", "0",
+            f"-map", f"-0:{flag}",
+            "-c", "copy",
+            output_path
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await process.communicate()
+
+        if process.returncode != 0:
+            await ms.edit(f"❌ <i>Failed to remove {stream_type} stream.</i>")
+            return None
+
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            await ms.edit(f"✅ <i>{stream_type.capitalize()} stream removed!</i>")
+            return output_path
+        else:
+            await ms.edit("❌ <i>Output file missing or empty.</i>")
+            return None
+
+    except Exception as e:
+        print(f"[remove_stream Exception] {e}")
+        await ms.edit(f"❌ <i>Error: {e}</i>")
+        return None
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#                 EXTRACT STREAM
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def extract_stream(input_path, output_path, stream_type, ms):
+    """
+    stream_type: 'video', 'audio', 'subtitle'
+    Extracts only that stream type to output_path.
+    """
+    try:
+        if not input_path or not os.path.exists(input_path):
+            await ms.edit("❌ <i>Input file not found.</i>")
+            return None
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        await ms.edit(f"📤 <i>Extracting {stream_type} stream...</i>")
+
+        type_map = {
+            "video": "v",
+            "audio": "a",
+            "subtitle": "s"
+        }
+        flag = type_map.get(stream_type, "a")
+
+        command = [
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-map", f"0:{flag}",
+            "-c", "copy",
+            output_path
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await process.communicate()
+
+        if process.returncode != 0:
+            await ms.edit(f"❌ <i>Failed to extract {stream_type} stream.</i>")
+            return None
+
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            await ms.edit(f"✅ <i>{stream_type.capitalize()} stream extracted!</i>")
+            return output_path
+        else:
+            await ms.edit("❌ <i>Extracted file missing or empty.</i>")
+            return None
+
+    except Exception as e:
+        print(f"[extract_stream Exception] {e}")
+        await ms.edit(f"❌ <i>Error: {e}</i>")
         return None
 
 
