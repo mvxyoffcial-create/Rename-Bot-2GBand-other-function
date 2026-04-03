@@ -38,8 +38,8 @@ async def rename_start(client, message):
             InlineKeyboardButton("🎬 Encode Video", callback_data="tool_encode"),
         ])
         buttons.append([
-            InlineKeyboardButton("➖ Remove Stream", callback_data="tool_remove_stream"),
-            InlineKeyboardButton("📤 Extract Stream", callback_data="tool_extract_stream"),
+            InlineKeyboardButton("➖ Remove Stream", callback_data="rmstream_go"),
+            InlineKeyboardButton("📤 Extract Stream", callback_data="exstream_go"),
         ])
 
     buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="tool_cancel")])
@@ -125,29 +125,7 @@ async def tool_menu_handler(bot, query):
             reply_markup=InlineKeyboardMarkup(buttons)
         )
 
-    elif data == "tool_remove_stream":
-        buttons = [
-            [InlineKeyboardButton("🎞 Remove Video Stream", callback_data="rmstream_video")],
-            [InlineKeyboardButton("🔊 Remove Audio Stream", callback_data="rmstream_audio")],
-            [InlineKeyboardButton("💬 Remove Subtitle Stream", callback_data="rmstream_subtitle")],
-            [InlineKeyboardButton("◀️ Back", callback_data="rmstream_back")],
-        ]
-        await query.message.edit(
-            f"**✂️ Remove Stream**\n\n**File:** `{filename}`\n\nSelect which stream to remove:",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
 
-    elif data == "tool_extract_stream":
-        buttons = [
-            [InlineKeyboardButton("🎞 Extract Video", callback_data="exstream_video")],
-            [InlineKeyboardButton("🔊 Extract Audio", callback_data="exstream_audio")],
-            [InlineKeyboardButton("💬 Extract Subtitle", callback_data="exstream_subtitle")],
-            [InlineKeyboardButton("◀️ Back", callback_data="exstream_back")],
-        ]
-        await query.message.edit(
-            f"**📤 Extract Stream**\n\n**File:** `{filename}`\n\nSelect which stream to extract:",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
