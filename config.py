@@ -16,7 +16,7 @@ class Config(object):
     # other configs
     BOT_UPTIME  = time.time()
     START_PIC   = "https://i.ibb.co/S4Y8w1NT/img-8108646188.jpg"
-    ADMIN="8498741978 @venuboyy"
+    ADMIN = [8498741978]
 
     # channels logs
     FORCE_SUBS   = "Zerodev2"
